@@ -7,5 +7,6 @@
     "btmtk.h": "32fc75535de925bf22eef2b4bdfa6645c8e3b3a76f25f048698ababd36004f7f"
   },
   "linux_source": "https://github.com/torvalds/linux/tree/master/drivers/bluetooth",
-  "build_status": "macOS compilation and hardware test pending"
+  "build_status": "Native macos-15 CI compiled and signed successfully; hardware validation pending",
+  "build_run": "https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275"
 }

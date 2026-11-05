@@ -2,7 +2,7 @@
 
 A source-level port for this ASUS X1605VA's MediaTek Bluetooth device, USB **13D3:3579**, based on Linux btmtk's 79xx firmware path and WTLMtkBluetooth's macOS USB integration.
 
-**Status: source implementation and host-side tests complete; native macOS compilation and hardware validation pending. No working Bluetooth claim is made.** The host used to prepare this project is Windows and has no macOS SDK/compiler. Nothing from this project has been added to the active EFI.
+**Status: native macOS GitHub Actions build PASSED; hardware validation pending.** The x86_64 kext compiled, ad-hoc signing/verification and all 10 tests passed. This does not establish working Bluetooth. Nothing from this project has been enabled in the active EFI.
 
 ## What was implemented
 
@@ -24,9 +24,9 @@ bash "/Volumes/OPENCORE/EFI/MT7902-Bluetooth/tools/build-mac.sh"
 sudo python3 "/Volumes/OPENCORE/EFI/MT7902-Bluetooth/tools/install.py" --efi "/Volumes/OPENCORE/EFI" --probe-only
 ```
 
-The build compiles the kext, checks MH_KEXT_BUNDLE/x86_64, kmod_info, unexpected C++ runtime symbols, then ad-hoc signs/verifies the bundle. It needs Kernel.framework headers in the selected macOS SDK. If compilation fails, stop and preserve its output; the installer refuses a missing or malformed binary. No binary was compiled on Windows.
+The build compiles the kext, checks MH_KEXT_BUNDLE/x86_64, kmod_info, unexpected C++ runtime symbols, then ad-hoc signs/verifies the bundle. It needs Kernel.framework headers in the selected macOS SDK. If compilation fails, stop and preserve its output; the installer refuses a missing or malformed binary. The published binary was compiled by GitHub Actions on macos-15; no binary was compiled on Windows.
 
-The installer changes only this driver's Kernel/Add entry and bundle. It backs up config.plist and an existing copy before replacing them. Its backup path is printed. It does not alter other kexts, audio, input, graphics or SIP/AMFI settings. OpenCore schema validation has not been run on the future installed config here; preserve the printed backup for recovery.
+The installer changes only this driver's Kernel/Add entry and bundle. It backs up config.plist and an existing copy before replacing them. Its backup path is printed. It does not alter other kexts, audio, input, graphics or SIP/AMFI settings. OpenCore schema validation has not been run on the future installed config; preserve the printed backup for recovery.
 
 Reboot using that EFI, then collect:
 
@@ -54,7 +54,7 @@ From Windows or another boot, restore **config.plist from the installer backup**
 
 ## Validation and provenance
 
-Host regression tests cover: actual image/layout, truncated files, invalid section counts, metadata offsets, overflow-sized sections, overlaps, and exact USB/probe/reset defaults. Python scripts compile; build/collection scripts pass Bash syntax checks. The firmware generator verifies both the manifest and separately pinned full digest. **These checks do not establish C++ compilation, kernel loading, USB protocol success or Bluetooth function.**
+Host regression tests cover: actual image/layout, truncated files, invalid section counts, metadata offsets, overflow-sized sections, overlaps, and exact USB/probe/reset defaults. Python scripts compile; build/collection scripts pass Bash syntax checks. The firmware generator verifies both the manifest and separately pinned full digest. **CI additionally establishes native C++ compilation and signing, but does not establish kernel loading, USB protocol success or Bluetooth function.**
 
 ```sh
 python3 -I tests/test_firmware.py
@@ -89,3 +89,11 @@ The recommended keys come directly from [BlueToolFixup's documentation](https://
 ## GitHub build
 
 This is a fork of watchthelight-labs/WTLMtkBluetooth. Native macOS CI builds the experimental port and uploads the ad-hoc-signed kext with licenses and its checksum. A successful CI build establishes compilation and packaging, not hardware operation. This ASUS adapter still needs a probe and firmware-loading test.
+
+## Verified native build
+
+[Successful macOS Actions run](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275) · [Download artifact](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275/artifacts/13426379236). Artifact downloads require a GitHub login and are retained for 7 days.
+
+Compiled source: e5f7e7277105fe24bca7f5ecce8c400b5c7b54d1. Later documentation/provenance commits do not change those compiled inputs. `CI-BUILD.json` records the artifact and executable digests. The binary is 581712 bytes, x86_64 MH_KEXT_BUNDLE; its embedded MT7902 firmware was checked byte-for-byte after download.
+
+For the first test, extract the artifact at the repository root so `out/MT7902Bt.kext` exists, then use the --probe-only installer above. The OPENCORE copy prepared for this laptop already includes that output, so rebuilding locally is optional. The probe will not enable Bluetooth.
