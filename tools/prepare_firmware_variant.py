@@ -10,7 +10,7 @@ def prepare(src, dst):
     shutil.copytree(src,dst)
     f=dst/'Contents/Info.plist';d=plistlib.loads(f.read_bytes())
     for e in d['IOKitPersonalities'].values():
-        assert e['MT7902AllowReset'] is False
+        assert 'MT7902AllowReset' not in e
         e['MT7902ProbeOnly']=False
     f.write_bytes(plistlib.dumps(d,sort_keys=False))
 

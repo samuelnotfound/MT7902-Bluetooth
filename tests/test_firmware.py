@@ -31,5 +31,5 @@ class FirmwareTests(unittest.TestCase):
         self.assertEqual(len(d['IOKitPersonalities']),1)
         p=next(iter(d['IOKitPersonalities'].values()))
         self.assertEqual((p['idVendor'],p['idProduct'],p['bInterfaceNumber']),(0x13d3,0x3579,0))
-        self.assertTrue(p['MT7902ProbeOnly']); self.assertFalse(p['MT7902AllowReset'])
+        self.assertTrue(p['MT7902ProbeOnly']); self.assertNotIn('MT7902AllowReset',p)
 if __name__=='__main__':unittest.main(verbosity=2)

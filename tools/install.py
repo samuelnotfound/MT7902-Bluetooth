@@ -1,6 +1,6 @@
 """Install a locally built probe or firmware-loader bundle on an existing EFI."""
 from pathlib import Path
-import argparse, plistlib, struct, hashlib, datetime, shutil, os, sys
+import argparse, plistlib, struct, datetime, shutil, os, sys
 ap=argparse.ArgumentParser(__doc__)
 ap.add_argument('--efi',type=Path,required=True)
 mode=ap.add_mutually_exclusive_group(required=True)
@@ -9,7 +9,8 @@ mode.add_argument('--load-firmware',action='store_true')
 a=ap.parse_args()
 if sys.platform!='darwin':sys.exit('Run on macOS after a successful native build.')
 root=a.efi.resolve(); cfgpath=root/'OC/config.plist'; kexts=root/'OC/Kexts'
-project=Path(__file__).resolve().parents[1]; source=project/'out/MT7902Bt.kext'
+project=Path(__file__).resolve().parents[1]
+source=project/('out/firmware/MT7902Bt.kext' if a.load_firmware else 'out/MT7902Bt.kext')
 exe=source/'Contents/MacOS/MT7902Bt'
 b=exe.read_bytes()
 if len(b)<32 or struct.unpack_from('<III',b)[0:2]!=(0xfeedfacf,0x01000007) or struct.unpack_from('<I',b,12)[0]!=11:
@@ -31,17 +32,15 @@ backup=root/'Backups'/('MT7902-'+stamp); backup.mkdir(parents=True)
 (backup/'config.plist').write_bytes(original)
 target=kexts/'MT7902Bt.kext'; staged=backup/'staged/MT7902Bt.kext'
 shutil.copytree(source,staged)
-pi=staged/'Contents/Info.plist'; inf=plistlib.loads(pi.read_bytes())
-for personality in inf['IOKitPersonalities'].values():personality['MT7902ProbeOnly']=a.probe_only
-pi.write_bytes(plistlib.dumps(inf,sort_keys=False))
-# Info.plist edits invalidate the ad-hoc signature; regenerate it before copying.
+# Both modes are signed by the build; verify without modifying the bundle.
 import subprocess
-subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(staged)],check=True)
 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(staged)],check=True)
+installed_info=plistlib.loads((staged/'Contents/Info.plist').read_bytes())
+for personality in installed_info['IOKitPersonalities'].values():
+    if personality['MT7902ProbeOnly'] != a.probe_only:
+        raise RuntimeError('Wrong signed mode selected')
 entry={'Arch':'x86_64','BundlePath':'MT7902Bt.kext','Comment':'Experimental MT7902: '+('probe only' if a.probe_only else 'RAM firmware loader'), 'Enabled':True,'ExecutablePath':'Contents/MacOS/MT7902Bt','PlistPath':'Contents/Info.plist','MinKernel':'21.0.0','MaxKernel':''}
 cfg['Kernel']['Add']=[e for e in cfg['Kernel']['Add'] if e['BundlePath']!='MT7902Bt.kext']; cfg['Kernel']['Add'].append(entry)
-if a.load_firmware:
-    configure_firmware_mode(cfg)
 old=backup/'previous-MT7902Bt.kext'; moved=False; installed=False
 try:
     if cfgpath.read_bytes()!=original:raise RuntimeError('Config changed during preparation')

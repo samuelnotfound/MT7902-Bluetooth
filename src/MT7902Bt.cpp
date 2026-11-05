@@ -1,7 +1,7 @@
 // Experimental MT7902 port: chip/firmware guard, no MT7925 register writes.
 // USB transport adapted from WTLMtkBluetooth; original notices follow.
 // <wtl> project: mtkbt | file: src/MT7902Bt.cpp | author: watchthelight </wtl>
-// MT7902Bt: loads the Bluetooth RAM code into the MediaTek MT7925 (USB 0489:E111, interface 0 "BT_ACL_If") and then
+// MT7902Bt: loads RAM firmware into MediaTek MT7902 (USB 13D3:3579, interface 0), then
 // lets go of the interface, so bluetoothd (patched by BlueToolFixup) can drive it as a plain USB HCI controller.
 //
 // Procedure, ported from Linux drivers/bluetooth/btmtk.c v6.18 (Linux v6.18, ISC,
@@ -13,8 +13,8 @@
 //     then the section in 250-byte blocks (flag 1 first, 2 middle, 3 last); 100 ms for activation.
 //   * endpoint reset option 0x74011890 = 0x00010001, then WMT FUNC_CTRL 1 (Bluetooth on).
 //
-// Cross-checked against and partly adapted from MT7902BtFw.cpp of ga403wm-hackintosh
-// (github.com/thanhnndev/ga403wm-hackintosh, kexts/MT7902BtFw/MT7902BtFw.cpp):
+// Cross-checked against and partly adapted from MtkBtFw.cpp of ga403wm-hackintosh
+// (github.com/thanhnndev/ga403wm-hackintosh, kexts/MtkBtFw/MtkBtFw.cpp):
 // the IOUSBHostInterface match on interface 0, the open / work / close pattern, the descriptor walk for the
 // interrupt IN endpoint and the drain of that endpoint during setup. That code is under the licence below.
 //
@@ -39,26 +39,9 @@
 //   ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 //   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-// Warm reboot (0.2). macOS never sends FUNC_CTRL 0 at shutdown, so after a restart the chip may still run the
-// firmware of the previous boot. earlier boots on macOS 15 and 26 saw two forms of it: "section 0 (and 1): already loaded"
-// followed by a query or a block that never gets its WMT event (section 2, block 55), with ~1000 interrupt packets
-// of firmware chatter meanwhile. 0.2 handles it in three ways:
-//   * a pass that fails after the chip already holds part of the firmware (a section reported loaded or sent in
-//     this pass), or any failed block, counts as "half-loaded": the MT7925 subsystem reset of
-//     btmtk_usb_subsys_reset runs and the whole download is repeated, at most kMaxResets times. Since 0.2.3 the
-//     same goes for a download that "succeeds" by reusing sections from the previous boot but whose FUNC_CTRL then
-//     gets no event (issue #1: sections 0 and 1 already loaded, section 2 sent, FUNC_CTRL silent);
-//   * when the very first WMT query gets no event, an HCI Read Local Version is sent first; a Command Complete on
-//     the interrupt endpoint means the firmware is up and the device is left as it is (as in 0.1);
-//   * at system power off / restart (IOPMrootDomain priority interest) and in stop(), WMT FUNC_CTRL 0 is sent as
-//     Linux btmtk_usb_shutdown does, so the next boot finds the function off and the WMT channel quiet.
-// Linux follows the subsystem reset with a USB port reset (btusb_mtk_reset: usb_queue_reset_device); here the
-// endpoint toggles of interface 0 are resynced with CLEAR_FEATURE(ENDPOINT_HALT) instead (IOUSBHostPipe::clearStall).
-// That alone did not rule out a loop: on some boards the chip itself may drop off the bus during the reset, so 0.2.4
-// also caps resets at kMaxResetsPerBoot across all instances.
-//
-// Every wait has a deadline, every failure ends in MT7902BtState = "error" with the interface closed. Nothing panics.
-// Result: ioreg -rc MT7902Bt -l | grep MT7902Bt
+// Warm boots can reuse running firmware when HCI responds. A failed download
+// releases the interface and reports an error; this driver performs no subsystem
+// reset or automatic retry. Power-off/restart notifications send FUNC_CTRL 0.
 
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
@@ -71,7 +54,6 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include <IOKit/usb/IOUSBHostInterface.h>
 #include <IOKit/usb/IOUSBHostPipe.h>
-#include <libkern/OSAtomic.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <stdarg.h>
@@ -97,34 +79,20 @@ constexpr uint8_t  kHciEvWmt = 0xE4;
 constexpr uint32_t kRegChipId = 0x70010200;     // MTK_BT_READ_DEV_ID
 constexpr uint32_t kRegFwVer = 0x80021004;
 constexpr uint32_t kRegFwFlavor = 0x70010020;
-constexpr uint32_t kBtMisc = 0x70002510;        // MTK_BT_MISC
-constexpr uint32_t kBtRstDone = 0x00000100;     // MTK_BT_RST_DONE
-constexpr uint32_t kBtSubsysRst = 0x70002610;
-constexpr uint32_t kBtWdtStatus = 0x740003A0; //   // MTK_BT_RESET_REG_CONNV3
 constexpr uint32_t kEpRstOpt = 0x74011890;      // MTK_EP_RST_OPT
 constexpr uint32_t kEpRstInOut = 0x00010001;    // MTK_EP_RST_IN_OUT_OPT
-constexpr uint32_t kUdmaIntStaBt = 0x74000024;  // MTK_UDMA_INT_STA_BT
-constexpr uint32_t kUdmaIntStaBt1 = 0x74000308; // MTK_UDMA_INT_STA_BT1
 
 // patch status, as btmtk_usb_hci_wmt_sync maps the PATCH_DWNLD event flag
 enum { PATCH_UNDONE = 0, PATCH_PROGRESS = 1, PATCH_DONE = 2 };
 
-// download() results. DL_NO_EVENT: the first query got no event at all. DL_HALF: the chip holds part of the
-// firmware (a section already loaded or sent in this pass, or a block failed) and the pass still failed.
-enum { DL_FAIL = 0, DL_OK = 1, DL_NO_EVENT = -2, DL_HALF = -3 };
+enum { DL_FAIL = 0, DL_OK = 1, DL_NO_EVENT = -2 };
 
 constexpr uint32_t kCtrlTimeoutMs = 1000;       // per control transfer
 constexpr uint32_t kWmtEventTimeoutMs = 2000;   // per WMT command (Linux waits up to HCI_INIT_TIMEOUT)
 constexpr uint32_t kOpenTimeoutMs = 10000;
 constexpr uint32_t kOffOpenTimeoutMs = 1000;    // FUNC_CTRL 0: bluetoothd has let go by then, or it is skipped
 constexpr uint32_t kOffLockWaitMs = 5000;       // FUNC_CTRL 0: how long to wait for a worker that is still loading
-constexpr uint32_t kMaxResets = 1;              // subsystem resets (each followed by a full download) per start
-constexpr uint32_t kMaxResetsPerBoot = 1;       // the same, across every MT7902Bt instance since the kext loaded
 
-// Shared by all instances for the life of the kext (one boot). If a subsystem reset makes the chip drop off the
-// bus, it re-enumerates, a fresh MT7902Bt starts and would reset it again: a loop that kept the whole USB controller
-// busy on issue #1 (keyboard and mouse frozen 3-5 s, working 1 s, over and over). The per-boot budget ends that.
-static volatile SInt32 gResetsThisBoot = 0;
 constexpr uint32_t kCmdBufSize = 512, kEvBufSize = 64, kIntrBufSize = 1024;
 
 inline uint32_t le32(const uint8_t *p) {
@@ -189,9 +157,7 @@ private:
     int wmt(uint8_t op, uint8_t flag, const uint8_t *data, uint16_t dlen, uint8_t *evOut, uint32_t evOutLen);
     int download();
     bool hciAlive();
-    bool subsysReset();
     int funcOn();
-    void resyncEndpoints();
     void intrArm();
     static void intrDone(void *owner, void *param, IOReturn status, uint32_t bytes);
     void intrStopAndRelease();
@@ -328,10 +294,7 @@ int MT7902Bt::wmt(uint8_t op, uint8_t flag, const uint8_t *data, uint16_t dlen, 
     return -2;
 }
 
-// btmtk_setup_firmware_79xx. Returns DL_OK, DL_FAIL, DL_NO_EVENT when the first query got no event at all (the
-// caller then checks for an already running firmware) or DL_HALF when the chip is left half-loaded (the caller
-// then resets the subsystem and tries again). Linux has no such split: it fails setup and lets
-// btusb_mtk_reset / the next hdev open sort it out.
+// Linux btmtk 79xx firmware transfer with complete section-table preflight.
 int MT7902Bt::download() {
     const uint8_t *fw = mtk_bt_fw;
     const uint32_t fwlen = mtk_bt_fw_len;
@@ -371,7 +334,6 @@ int MT7902Bt::download() {
     }
     bool firstQuery = true;
     // a failure from here on leaves a half-loaded chip when it already holds part of the firmware
-    auto broken = [this]() { return (sectionsSkipped || sectionsSent) ? DL_HALF : DL_FAIL; };
     for (uint32_t i = 0; i < nsec && !stopping; i++) {
         const uint8_t *map = fw + kFwHdrSize + kFwGdSize + kFwSecMapSize * i;
         uint32_t off = le32(map + 4);            // secoffset
@@ -393,8 +355,8 @@ int MT7902Bt::download() {
                 return DL_NO_EVENT;
             firstQuery = false;
             if (n < 0)
-                return stopping ? DL_FAIL : broken();
-            if (e[6] > 2) { fail("unknown WMT patch status %u", e[6]); return broken(); }
+                return DL_FAIL;
+            if (e[6] > 2) { fail("unknown WMT patch status %u", e[6]); return DL_FAIL; }
             status = e[6];
             if (status != PATCH_PROGRESS)
                 break;
@@ -404,7 +366,7 @@ int MT7902Bt::download() {
             return DL_FAIL;
         if (status == PATCH_PROGRESS) {
             fail("section %u: chip stays busy", i);
-            return broken();
+            return DL_FAIL;
         }
         if (status == PATCH_DONE) {
             say("section %u: already loaded", i);
@@ -412,7 +374,7 @@ int MT7902Bt::download() {
             continue;
         }
         if (status != PATCH_UNDONE)
-            return broken();
+            return DL_FAIL;
         const uint8_t *p = fw + off;
         uint32_t left = dl, blocks = 0;
         bool first = true;
@@ -425,7 +387,7 @@ int MT7902Bt::download() {
                     return DL_FAIL;
                 // the section is now partly in RAM whatever happened before: always half-loaded
                 fail("section %u: block %u failed", i, blocks);
-                return DL_HALF;
+                return DL_FAIL;
             }
             p += n;
             left -= n;
@@ -464,58 +426,6 @@ bool MT7902Bt::hciAlive() {
         IOSleep(10);
     }
     return false;
-}
-
-// Linux btmtk_usb_subsys_reset(): default 79xx branch used for MT7902 in
-// the pinned upstream tree (not the MT7925 CONNV3 path). Explicit opt-in only.
-bool MT7902Bt::subsysReset() {
-    if (getProperty("MT7902AllowReset") != kOSBooleanTrue || !chipSeen)
-        return false;
-    uint32_t v = 0;
-    if (!uhwWrite(kEpRstOpt, kEpRstInOut) || !uhwRead(kBtWdtStatus, &v) ||
-        !uhwWrite(kBtSubsysRst, 1) || !uhwWrite(kUdmaIntStaBt, 0xFF) ||
-        !uhwRead(kUdmaIntStaBt, &v) || !uhwWrite(kUdmaIntStaBt1, 0xFF) ||
-        !uhwRead(kUdmaIntStaBt1, &v))
-        return false;
-    IOSleep(20);
-    if (!uhwWrite(kBtSubsysRst, 0) || !uhwRead(kBtSubsysRst, &v))
-        return false;
-    bool done = false;
-    uint64_t deadline = nowMs() + 1000;
-    while (!stopping && nowMs() < deadline) {
-        if (uhwRead(kBtMisc, &v) && (v & kBtRstDone)) { done = true; break; }
-        IOSleep(20);
-    }
-    uint32_t id = 0;
-    if (!done || !regRead(kRegChipId, &id) || (id & 0xFFFF) != 0x7902) {
-        fail("MT7902 reset did not complete or chip ID changed");
-        return false;
-    }
-    return true;
-}
-
-// After the subsystem reset the chip's endpoints restart at DATA0 (EP reset option); bring the host side in step.
-void MT7902Bt::resyncEndpoints() {
-    uint8_t addrs[3] = {intrAddr, bulkIn, bulkOut};
-    for (uint8_t a : addrs) {
-        if (!a)
-            continue;
-        if (a == intrAddr && intrPipe) {
-            intrPipe->abort(IOUSBHostIOSource::kAbortSynchronous, kIOReturnAborted, this);
-            for (int i = 0; i < 100 && intrBusy; i++)
-                IOSleep(10);
-            IOReturn r = intrPipe->clearStall(true);
-            say("ep %02x resync %08x", a, r);
-            intrArm();
-            continue;
-        }
-        IOUSBHostPipe *p = intf->copyPipe(a);
-        if (p) {
-            IOReturn r = p->clearStall(true);
-            say("ep %02x resync %08x", a, r);
-            p->release();
-        }
-    }
 }
 
 void MT7902Bt::intrDone(void *owner, void *, IOReturn status, uint32_t bytes) {
@@ -557,7 +467,7 @@ void MT7902Bt::intrStopAndRelease() {
 }
 
 // Interface 0 endpoints from the configuration descriptor (bLength / bDescriptorType walk): interrupt IN for
-// events, bulk IN/OUT for ACL. Only the interrupt pipe is used here; the bulk ones are only resynced after a reset.
+// events, bulk IN/OUT for ACL. Only the interrupt pipe is used here; the bulk addresses are recorded for diagnostics only.
 void MT7902Bt::findEndpoints() {
     const uint8_t *cfg = reinterpret_cast<const uint8_t *>(intf->getConfigurationDescriptor());
     const uint8_t *idesc = reinterpret_cast<const uint8_t *>(intf->getInterfaceDescriptor());
@@ -653,62 +563,23 @@ bool MT7902Bt::setup() {
     }
     chipSeen = true;
 
-    // pass 1 is the normal download; passes 2 .. kMaxResets + 1 each follow a subsystem reset
-    for (uint32_t pass = 1;; pass++) {
-        setProperty("MT7902BtTries", pass, 32);
-        sectionsSent = sectionsSkipped = 0;
-        step("download");
-        int d = download();
-        setProperty("MT7902BtSectionsSent", sectionsSent, 32);
-        setProperty("MT7902BtSectionsSkipped", sectionsSkipped, 32);
-        if (d == DL_OK) {
-            int f = funcOn();
-            if (f >= 0)
-                return true;
-            // FUNC_CTRL got no event after a pass that reused sections left over from the previous boot: the
-            // chip holds a mix of old and new firmware and never starts it (issue #1, B850 desktop, 0.2.2).
-            // Treat it like a half-loaded chip: reset the subsystem and download everything again.
-            if (stopping || f != -2 || !sectionsSkipped)
-                return false;
-            say("func ctrl silent after reusing %u loaded sections", sectionsSkipped);
-            d = DL_HALF;
+    setProperty("MT7902BtTries", 1u, 32);
+    sectionsSent = sectionsSkipped = 0;
+    step("download");
+    int result = download();
+    setProperty("MT7902BtSectionsSent", sectionsSent, 32);
+    setProperty("MT7902BtSectionsSkipped", sectionsSkipped, 32);
+    if (result == DL_OK)
+        return funcOn() >= 0;
+    if (result == DL_NO_EVENT && !stopping) {
+        step("hci probe");
+        if (hciAlive()) {
+            setProperty("MT7902BtWarmPath", "firmware already running (HCI answers)");
+            return true;
         }
-        if (stopping || (d != DL_NO_EVENT && d != DL_HALF))
-            return false;
-        if (d == DL_NO_EVENT && pass == 1) {
-            step("hci probe");
-            if (hciAlive()) {
-                setProperty("MT7902BtWarmPath", "firmware already running (HCI answers)");
-                say("no WMT event but HCI answers: firmware already running, left as is");
-                return true;
-            }
-        }
-        if (getProperty("MT7902AllowReset") != kOSBooleanTrue) {
-            setProperty("MT7902BtWarmPath", "reset disabled; cold boot required");
-            fail("firmware setup incomplete; automatic reset disabled (fully power off before retry)");
-            return false;
-        }
-        if (pass > kMaxResets) {
-            fail("download still failing after %u subsys resets, giving up", kMaxResets);
-            return false;
-        }
-        if (OSIncrementAtomic(&gResetsThisBoot) >= (SInt32)kMaxResetsPerBoot) {
-            setProperty("MT7902BtWarmPath", "reset budget for this boot used up, giving up");
-            fail("%u subsys resets already done this boot, not resetting again (power off fully to recover)",
-                 kMaxResetsPerBoot);
-            return false;
-        }
-        const char *why = d == DL_HALF ? "half-loaded" : "no WMT event";
-        say("pass %u: %s, subsys reset", pass, why);
-        setProperty("MT7902BtWarmPath", d == DL_HALF ? "half-loaded, subsys reset" : "no WMT event, subsys reset");
-        step("subsys reset");
-        bool ok = subsysReset();
-        setProperty("MT7902BtSubsysReset", ok ? "done" : "failed");
-        say("subsys reset %s", ok ? "done" : "failed");
-        if (!ok)
-            return false;
-        resyncEndpoints();
     }
+    setProperty("MT7902BtRecovery", "cold boot required");
+    return false;
 }
 
 // After download: endpoint reset option, WMT FUNC_CTRL 1 (Linux MT7902 path). Returns 0 when Bluetooth
@@ -731,7 +602,7 @@ int MT7902Bt::funcOn() {
 }
 
 // btmtk_usb_shutdown: WMT FUNC_CTRL with param 0 ("Disable the device"), status ignored as in Linux. Sent once, at
-// system power off / restart or in stop(), only when a 7925 was seen and nobody else (bluetoothd) has the
+// system power off / restart or in stop(), only after an MT7902 was identified and nobody else (bluetoothd) has the
 // interface open; by the time IOPMrootDomain calls its priority clients for a halt, launchd has already ended
 // bluetoothd, so the interface is normally free. Best effort: every failure is logged and skipped.
 void MT7902Bt::funcOff(const char *why) {
@@ -826,7 +697,7 @@ bool MT7902Bt::start(IOService *provider) {
     if (!cmd || !ev || !lock)
         return false;
     probeOnly = getProperty("MT7902ProbeOnly") == kOSBooleanTrue;
-    setProperty("MT7902BtVersion", "0.1.0");
+    setProperty("MT7902BtVersion", "0.1.1");
     setProperty("MT7902BtProbeOnly", probeOnly ? kOSBooleanTrue : kOSBooleanFalse);
     setProperty("MT7902BtFirmware", mtk_bt_fw_name);
     setProperty("MT7902BtFirmwareSha256", mtk_bt_fw_sha256);

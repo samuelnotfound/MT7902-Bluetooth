@@ -14,5 +14,5 @@ class SignedVariantTests(unittest.TestCase):
             self.assertEqual((dst/'Contents/MacOS/MT7902Bt').read_bytes(),b'binary-preserved')
             d=plistlib.loads((dst/'Contents/Info.plist').read_bytes())
             for e in d['IOKitPersonalities'].values():
-                self.assertFalse(e['MT7902ProbeOnly']);self.assertFalse(e['MT7902AllowReset'])
+                self.assertFalse(e['MT7902ProbeOnly']);self.assertNotIn('MT7902AllowReset',e)
 if __name__=='__main__':unittest.main()
