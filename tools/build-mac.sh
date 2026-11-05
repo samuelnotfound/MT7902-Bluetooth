@@ -25,5 +25,10 @@ grep -q ' _kmod_info' out/symbols.txt
 if xcrun nm -u "$OUT/MacOS/MT7902Bt" | grep -Eq '[[:space:]]_{2,3}(cxa_|Unwind|gxx_)'; then echo "Unexpected C++ runtime dependency" >&2; exit 1; fi
 codesign --force --sign - out/MT7902Bt.kext
 codesign --verify --strict out/MT7902Bt.kext
+# Produce a separately signed firmware-loading bundle; no Info.plist edits at install time.
+python3 -I tools/prepare_firmware_variant.py
+codesign --force --sign - out/firmware/MT7902Bt.kext
+codesign --verify --strict out/firmware/MT7902Bt.kext
+shasum -a 256 out/firmware/MT7902Bt.kext/Contents/MacOS/MT7902Bt > out/firmware/SHA256SUMS
 shasum -a 256 "$OUT/MacOS/MT7902Bt" > out/SHA256SUMS
 printf 'Built %s. Default mode is PROBE ONLY; no EFI files were modified.\n' "out/MT7902Bt.kext"

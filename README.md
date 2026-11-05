@@ -92,8 +92,10 @@ This is a fork of watchthelight-labs/WTLMtkBluetooth. Native macOS CI builds the
 
 ## Verified native build
 
-[Successful macOS Actions run](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275) · [Download artifact](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275/artifacts/13426379236). Artifact downloads require a GitHub login and are retained for 7 days.
+[Successful macOS Actions run](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275) Â· [Download artifact](https://github.com/samuelnotfound/MT7902-Bluetooth/actions/runs/42052282275/artifacts/13426379236). Artifact downloads require a GitHub login and are retained for 7 days.
 
 Compiled source: e5f7e7277105fe24bca7f5ecce8c400b5c7b54d1. Later documentation/provenance commits do not change those compiled inputs. `CI-BUILD.json` records the artifact and executable digests. The binary is 581712 bytes, x86_64 MH_KEXT_BUNDLE; its embedded MT7902 firmware was checked byte-for-byte after download.
 
 For the first test, extract the artifact at the repository root so `out/MT7902Bt.kext` exists, then use the --probe-only installer above. The OPENCORE copy prepared for this laptop already includes that output, so rebuilding locally is optional. The probe will not enable Bluetooth.
+
+The native build now also produces `out/firmware/MT7902Bt.kext`, separately ad-hoc signed with MT7902ProbeOnly=false and automatic resets still disabled. Use this variant for firmware-loading installations that must preserve the native signature. The original `out/MT7902Bt.kext` remains probe-only.
