@@ -1,0 +1,11 @@
+{
+  "repository": "watchthelight-labs/WTLMtkBluetooth",
+  "commit": "db331dfb48b06328a5642d87b95a711632e6e691",
+  "archive_sha256": "5ecd0a9436e2c625db17e5a6275e9f1d7690bca41bf85c332649f040874019ab",
+  "linux_reference": {
+    "btmtk.c": "7c91baf6d059e54ef9cb1861ce5267e471da7a6afe9d8c6599bd39253904d92d",
+    "btmtk.h": "32fc75535de925bf22eef2b4bdfa6645c8e3b3a76f25f048698ababd36004f7f"
+  },
+  "linux_source": "https://github.com/torvalds/linux/tree/master/drivers/bluetooth",
+  "build_status": "macOS compilation and hardware test pending"
+}

@@ -1,26 +1,21 @@
-name: build
-on:
-  push:
-  pull_request:
-  release:
-    types: [published]
+name: native-macOS-build
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: macos-15
-    permissions:
-      contents: write
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - run: tools/build-mac.sh
+      - run: bash tools/build-mac.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: MtkBt
-          path: out/MtkBt.kext
-      - if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p MtkBt-${GITHUB_REF_NAME}
-          cp -R out/MtkBt.kext LICENSE NOTICE.md LICENSES MtkBt-${GITHUB_REF_NAME}/
-          zip -r MtkBt-${GITHUB_REF_NAME}-ci.zip MtkBt-${GITHUB_REF_NAME}
-          gh release upload "$GITHUB_REF_NAME" MtkBt-${GITHUB_REF_NAME}-ci.zip
+          name: MT7902Bt-native-build
+          path: |
+            out/MT7902Bt.kext
+            out/SHA256SUMS
+            LICENSE
+            NOTICE.md
+            LICENSES
+          retention-days: 7

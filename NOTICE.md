@@ -1,17 +1,9 @@
-# Notices and sources
+# MT7902 port: notices
 
-## Linux btmtk (ISC)
-The procedure in `src/MtkBt.cpp` is ported from `drivers/bluetooth/btmtk.c` and `btmtk.h` in Linux v6.18 (https://github.com/torvalds/linux, tag v6.18), SPDX ISC, Copyright (C) 2021 MediaTek Inc.: `btmtk_usb_setup` (the 0x7925 case), `btmtk_setup_firmware_79xx`, `btmtk_usb_hci_wmt_sync`, `btmtk_usb_reg_read`, `btmtk_usb_uhw_reg_read` / `_write`, `btmtk_usb_subsys_reset`, and the register and opcode constants.
+This is an experimental derivative of watchthelight-labs/WTLMtkBluetooth, not an upstream-supported MT7902 release. Exact upstream revision and Linux reference hashes are in UPSTREAM.json. Original upstream notices remain in docs/NOTICE.upstream.md and src/MT7902Bt.cpp; ISC and Clear BSD license files are retained.
 
-## itlmt7925 / MtkBtFw (BSD-3-Clause-Clear)
-Cross-checked against and partly adapted from `kexts/MtkBtFw/MtkBtFw.cpp` of https://github.com/thanhnndev/ga403wm-hackintosh, Copyright (c) 2026 thanhnndev and contributors, The Clear BSD License. Adapted parts: the `IOUSBHostInterface` match on interface 0, the open / work / close pattern, the descriptor walk for the interrupt endpoint and the interrupt drain. Their notice is kept in full at the top of `src/MtkBt.cpp` and in `LICENSES/BSD-3-Clause-Clear-itlmt7925.txt`; any binary distribution of MtkBt must carry it.
+MT7902 changes follow Linux drivers/bluetooth/btmtk.c and btmtk.h (ISC, MediaTek copyright notices retained in docs/linux-reference). The default MT7902 reset route follows the pinned mainline reference, rather than a downstream patch that uses the MT7922 reset path. Automatic reset is disabled. MT7925 sleep-protection/CONNV3 writes were removed from the compiled source.
 
-## Firmware
-`firmware/BT_RAM_CODE_MT7925_1_1_hdr.bin` is MediaTek's, from linux-firmware (https://gitlab.com/kernel-firmware/linux-firmware, commit d5455717ead0, `mediatek/mt7925/`), unmodified, sha256 `be7c18e37221e277baaef853be3a0ba930138ee879f336ff7b185e79ab09a5c9`, redistributable under `LICENSES/LICENCE.mediatek` (for use with MediaTek devices). It is not under ISC or Clear BSD. The build embeds it in the kext.
+Firmware: BT_RAM_CODE_MT7902_1_1_hdr.bin, 509320 bytes, build 20250826211444, SHA-256 4f53b5e02fbd933172e18caf952bda410a877eaad00561781528cb4aff58dc38. Downloaded unchanged from https://gitlab.com/kernel-firmware/linux-firmware/-/raw/main/mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin. Redistributed solely under LICENSES/LICENCE.mediatek for use with MediaTek hardware. The MT7925 firmware is not included in this port.
 
-## Related
-- BlueToolFixup (acidanthera/BrcmPatchRAM, created by Dhinak G, GPL-2.0) is what lets `bluetoothd` use the controller after MtkBt has loaded its firmware. Nothing from it is in this repository.
-- `src/kmod_info.c` reproduces the `kmod_info` block Xcode generates, using Apple's `KMOD_EXPLICIT_DECL` macro.
-
-## Everything else
-Copyright (C) 2026 watchthelight, ISC (`LICENSE`).
+Original MT7902 modifications and local tools are ISC, under the terms in LICENSE. The upstream copyright notice remains intact. This project is not affiliated with MediaTek, Apple or watchthelight-labs.

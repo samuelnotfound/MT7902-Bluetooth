@@ -1,3 +1,7 @@
 out/
 .export-staging/
 .DS_Store
+__pycache__/
+*.pyc
+reports/
+downloads/
